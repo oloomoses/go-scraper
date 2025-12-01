@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/oloomoses/go-craper/crawler"
+	"github.com/oloomoses/go-craper/parser"
 )
 
 func main() {
@@ -17,6 +18,6 @@ func main() {
 		log.Fatal("error fetching books", err)
 	}
 
-	fmt.Println(data)
+	fmt.Println(parser.ExtractAnkor(data))
 
 }
