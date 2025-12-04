@@ -32,11 +32,7 @@ func ParseCatalogue(htmlBody string, baseUrl string) ([]model.Product, string, e
 
 		if node.Type == html.ElementNode && node.Data == "li" && hasClass(node, "next") {
 			if a := findChildByTag(node, "a"); a != nil {
-				for _, a := range node.Attr {
-					if a.Key == "href" {
-						nextUrl = a.Val
-					}
-				}
+				nextUrl = strings.TrimSpace(a.Attr[0].Val)
 			}
 		}
 
