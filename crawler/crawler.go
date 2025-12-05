@@ -5,22 +5,26 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/oloomoses/go-craper/model"
 	"github.com/oloomoses/go-craper/parser"
+	"github.com/oloomoses/go-craper/polite"
 	"github.com/oloomoses/go-craper/util"
 )
 
 type Crawl struct {
 	BaseUrl string
 	Visited map[string]bool
+	Robots  *polite.Robots
 }
 
 func New(baseUrl string) *Crawl {
 	return &Crawl{
 		BaseUrl: baseUrl,
 		Visited: make(map[string]bool),
+		Robots:  polite.NewRobots(baseUrl),
 	}
 }
 
@@ -58,12 +62,21 @@ func (c *Crawl) Crawl(startUrl string, maxPages int) ([]model.Product, error) {
 			break
 		}
 
-		currentUrl, err = util.Resolve(currentUrl, nextHref)
+		nextFullUrl, err := util.Resolve(currentUrl, nextHref)
 
 		if err != nil {
 			log.Fatal("Bad Url", err)
 			break
 		}
+
+		parsedUrl, _ := url.Parse(nextFullUrl)
+
+		if !c.Robots.CanFetch(parsedUrl.Path) {
+			log.Printf("Blocked by robots.txt: %s", parsedUrl.Path)
+			break
+		}
+
+		currentUrl = nextFullUrl
 
 		time.Sleep(1 * time.Second)
 	}
