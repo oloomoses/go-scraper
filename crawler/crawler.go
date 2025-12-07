@@ -1,11 +1,14 @@
 package crawler
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sync"
 	"time"
 
 	"github.com/oloomoses/go-craper/model"
@@ -84,6 +87,65 @@ func (c *Crawl) Crawl(startUrl string, maxPages int) ([]model.Product, error) {
 	return allProducts, nil
 }
 
+func (c *Crawl) CrawlConcurrently(ctx context.Context, baseUrl string, maxPages int, workers int) ([]model.Product, error) {
+	var allProducts []model.Product
+	urls, err := c.DiscoverPages(baseUrl, maxPages)
+	wg := &sync.WaitGroup{}
+
+	if err != nil {
+		return nil, err
+	}
+
+	jobs := make(chan string, len(urls))
+
+	results := make(chan []model.Product, workers)
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+
+		go func(id int) {
+			defer wg.Done()
+			for u := range jobs {
+				select {
+				case <-ctx.Done():
+					return
+				default:
+				}
+				products, _, err := c.fetchAndParse(u)
+
+				if err != nil {
+					log.Printf("Worker %d failed %s: %v \n", id, u, err)
+					continue
+				}
+				results <- products
+			}
+		}(i + 1)
+	}
+
+	go func() {
+		defer close(jobs)
+		for _, u := range urls {
+			select {
+			case jobs <- u:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	go func() {
+		defer close(results)
+		for prods := range results {
+			allProducts = append(allProducts, prods...)
+		}
+
+	}()
+
+	wg.Wait()
+
+	return allProducts, nil
+}
+
 func (c *Crawl) fetchAndParse(url string) ([]model.Product, string, error) {
 	htmlBody, err := Fetch(url)
 
@@ -94,8 +156,53 @@ func (c *Crawl) fetchAndParse(url string) ([]model.Product, string, error) {
 	return parser.ParseCatalogue(htmlBody, c.BaseUrl)
 }
 
+func (c *Crawl) DiscoverPages(baseUrl string, maxPages int) ([]string, error) {
+	var urls []string
+
+	urls = append(urls, baseUrl)
+	pageNumber := 0
+
+	newBaseUrl, err := url.Parse(baseUrl)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if newBaseUrl.Path == "" {
+		pageNumber = 1
+	} else {
+
+		re := regexp.MustCompile(`page-(\d+)`)
+		match := re.FindStringSubmatch(newBaseUrl.Path)
+
+		fmt.Sscanf(match[1], "%d", &pageNumber)
+	}
+
+	for i := 1; i <= maxPages; i++ {
+		pageNumber++
+		u := fmt.Sprintf("/catalogue/page-%d.html", pageNumber)
+
+		resolvedUrl, _ := util.Resolve(baseUrl, u)
+
+		urls = append(urls, resolvedUrl)
+	}
+
+	return urls, nil
+}
+
 func Fetch(url string) (string, error) {
-	res, err := http.Get(url)
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		Transport: &http.Transport{
+			MaxIdleConns:        100,
+			MaxIdleConnsPerHost: 50,
+			MaxConnsPerHost:     100,
+			IdleConnTimeout:     90 * time.Second,
+			DisableCompression:  false,
+			ForceAttemptHTTP2:   true,
+		},
+	}
+	res, err := client.Get(url)
 
 	if err != nil {
 		return "", err
